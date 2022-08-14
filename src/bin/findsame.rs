@@ -10,6 +10,7 @@ use std::fmt;
 use std::io;
 use std::io::prelude::*;
 use std::str;
+use std::sync::{Arc, Mutex};
 
 use hex;
 use kdtree::distance::squared_euclidean;
@@ -78,23 +79,24 @@ fn main() {
   let (mut images, tree) = read_imagedata();
   eprintln!("#IMAGE: {}", images.len());
 
-  let mut checked: HashSet<u64> = HashSet::new();
+  // cf. https://rustforbeginners.hatenablog.com/entry/arc-mutex-design-pattern
+  let keys: Vec<_> = images.keys().cloned().collect();
+  let checked = Arc::new(Mutex::new(HashSet::new()));
   images.par_iter().for_each(|(id, im)| {
-    if *id >= skip && im.status != Status::Deleted && !checked.contains(id) {
+    if *id >= skip && im.status != Status::Deleted &&
+       !checked.lock().unwrap().contains(id) {
       let mut ids: Vec<u64> = vec![];
       for i in near_images(&id, &images, &tree)
                  .iter()
                  .filter(|&i| images.get(i).unwrap().status != Status::Deleted) {
         ids.push(*i);
-        //checked.insert(*i);
+        checked.lock().unwrap().insert(*i);
       }
 
       if ids.len() > 0 {
         print_image(&id, &images);
         ids.iter().for_each(|i| {
-          //let mut idx: u64 = i.clone();
           print_image(&i, &images);
-          //checked.insert(idx);
         });
         println!("")
       }
@@ -102,16 +104,6 @@ fn main() {
   });
 
 }
-
-/*
-fn output_result(id: &u64, ids: &Vec<u64>, images: &BTreeMap<u64, Image>) {
-  print_image(&id, &images);
-  for i in ids.iter() {
-    print_image(&i, &images);
-  }
-  println!("")
-}
-*/
 
 fn print_image(id: &u64, images: &BTreeMap<u64, Image>) {
   let img = images.get(id).unwrap();
@@ -192,8 +184,8 @@ fn near_images(id: &u64, images: &BTreeMap<u64, Image>, tree: &ColTree) -> Vec<u
     let mut nears: Vec<u64> = vec![];
     let srcfp = &srcimg.fp;
     for i in id0.iter() {
-      if i <= id || *i == id + 1 {  // 連続した同じような写真が含まれないように
-        continue
+      if (*i as i64 - *id as i64).abs() == 1 {  // 連続した同じような写真が含まれないように
+          continue
       }
       let dstfp = &images.get(i).unwrap().fp;
       if same(srcfp, dstfp) {
