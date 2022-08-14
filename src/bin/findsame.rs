@@ -4,6 +4,7 @@
 //
 
 use std::collections::BTreeMap;
+use std::collections::HashSet;
 use std::env;
 use std::fmt;
 use std::io;
@@ -77,32 +78,45 @@ fn main() {
   let (mut images, tree) = read_imagedata();
   eprintln!("#IMAGE: {}", images.len());
 
-  //for (id, im) in images.iter() {
+  let mut checked: HashSet<u64> = HashSet::new();
   images.par_iter().for_each(|(id, im)| {
-    if *id >= skip && im.status != Status::Deleted && im.check == false {
+    if *id >= skip && im.status != Status::Deleted && !checked.contains(id) {
       let mut ids: Vec<u64> = vec![];
       for i in near_images(&id, &images, &tree)
                  .iter()
                  .filter(|&i| images.get(i).unwrap().status != Status::Deleted) {
-        ids.push(*i)
+        ids.push(*i);
+        //checked.insert(*i);
       }
 
       if ids.len() > 0 {
-        output_result(&id, &ids, &images);
+        print_image(&id, &images);
+        ids.iter().for_each(|i| {
+          //let mut idx: u64 = i.clone();
+          print_image(&i, &images);
+          //checked.insert(idx);
+        });
+        println!("")
       }
     }
   });
 
 }
 
+/*
 fn output_result(id: &u64, ids: &Vec<u64>, images: &BTreeMap<u64, Image>) {
-  let simg = images.get(id).unwrap();
-  print!("{}({:?},{})/", id, simg.reso, simg.size);
+  print_image(&id, &images);
   for i in ids.iter() {
-    let dimg = images.get(i).unwrap();
-    print!("{}({:?},{})/", i, dimg.reso, dimg.size);
+    print_image(&i, &images);
   }
   println!("")
+}
+*/
+
+fn print_image(id: &u64, images: &BTreeMap<u64, Image>) {
+  let img = images.get(id).unwrap();
+  print!("{}({:?},{},({:.0},{:.0},{:.0}))/", id, img.reso, img.size,
+    img.color[0] * 1000f32, img.color[1] * 1000f32, img.color[2] * 1000f32);
 }
 
 fn read_imagedata() -> (BTreeMap<u64, Image>, ColTree) {
