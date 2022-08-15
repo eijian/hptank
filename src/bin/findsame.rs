@@ -3,8 +3,6 @@
 // Usage: cat <input data> | findsame [<skip count>]
 //
 
-use std::collections::BTreeMap;
-use std::collections::HashMap;
 use std::collections::HashSet;
 use std::env;
 use std::fmt;
@@ -53,6 +51,7 @@ impl fmt::Display for Status {
 }
 
 struct Image {
+  key: usize,
   id: u64,
   reso: (u32, u32),
   size: u32,
@@ -65,12 +64,12 @@ impl Image {
   pub const RADIUS: f32 = 0.0015;
 }
 
-type ColTree = KdTree<f32, u64, Color>;
+type ColTree = KdTree<f32, usize, Color>;
 
 fn main() {
   let args: Vec<String> = env::args().collect();
-  let skip: u64 = if args.len() == 2 {
-    match args[1].parse::<u64>() {
+  let skip: usize = if args.len() == 2 {
+    match args[1].parse::<usize>() {
       Ok(n) => n,
       _     => 0
     }
@@ -78,33 +77,34 @@ fn main() {
     0
   };
 
-  let (mut images, trees) = read_imagedata();
+  let (images, trees) = read_imagedata();
 
   let nimgs = images.len() as f32 / 100.0;
   let time_s = Instant::now();
   // cf. https://rustforbeginners.hatenablog.com/entry/arc-mutex-design-pattern
   let checked = Arc::new(Mutex::new(HashSet::new()));
-  images.par_iter().for_each(|(id, im)| {
-    if id % 1000 == 0 {
+  images.par_iter().for_each(|im| {
+    let key = im.key;
+    if key % 1000 == 0 {
       let nc = checked.lock().unwrap().len() as f32;
       let tm = time_s.elapsed().as_secs_f32() * 1000.0;
       eprint!("checked: {} images ({:.1}%) {:.2} k/s\r", nc, nc / nimgs, nc / tm);
     };
-    if !checked.lock().unwrap().contains(id) {
-      checked.lock().unwrap().insert(*id);
-      if *id >= skip && im.status != Status::Deleted {
-        let mut ids: Vec<u64> = vec![];
-        for i in near_images(&id, &images, &trees)
+    if !checked.lock().unwrap().contains(&key) {
+      checked.lock().unwrap().insert(key);
+      if key >= skip && im.status != Status::Deleted {
+        let mut keys: Vec<usize> = vec![];
+        for k in near_images(&key, &images, &trees)
                    .iter()
-                   .filter(|&i| images.get(i).unwrap().status != Status::Deleted) {
-          ids.push(*i);
-          checked.lock().unwrap().insert(*i);
+                   .filter(|n| images[**n as usize].status != Status::Deleted) {
+          keys.push(*k);
+          checked.lock().unwrap().insert(*k);
         }
 
-        if ids.len() > 0 {
-          print_image(&id, &images);
-          ids.iter().for_each(|i| {
-            print_image(&i, &images);
+        if keys.len() > 0 {
+          print_image(&key, &images);
+          keys.iter().for_each(|k| {
+            print_image(&k, &images);
           });
           println!("")
         }
@@ -114,19 +114,17 @@ fn main() {
   eprintln!("\nTOTAL: {:.2} s", time_s.elapsed().as_secs_f32());
 }
 
-//fn print_image(id: &u64, images: &BTreeMap<u64, Image>) {
-fn print_image(id: &u64, images: &HashMap<u64, Image>) {
-  let img = images.get(id).unwrap();
-  print!("{}({:?},{},({:.0},{:.0},{:.0}))/", id, img.reso, img.size,
-    img.color[0] * 1000f32, img.color[1] * 1000f32, img.color[2] * 1000f32);
+fn print_image(key: &usize, images: &Vec<Image>) {
+  let img = &images[*key as usize];
+  print!("{}({:?},{},({:.0},{:.0},{:.0}))/", img.id, img.reso, img.size,
+    img.color[0] * 1000_f32, img.color[1] * 1000_f32, img.color[2] * 1000_f32);
 }
 
-//fn read_imagedata() -> (BTreeMap<u64, Image>, Vec<ColTree>) {
-fn read_imagedata() -> (HashMap<u64, Image>, Vec<ColTree>) {
-  let mut images = HashMap::new();
+fn read_imagedata() -> (Vec<Image>, Vec<ColTree>) {
+  let mut images: Vec<Image> = vec![];
+  let mut nkey = 0_usize;
   let mut trees: Vec<ColTree> = vec![];
   let mut ntree = 0_usize;
-  let mut img_cnt = 0_i32;
 
   let stdin = io::stdin();
   for l in stdin.lock().lines() {
@@ -134,19 +132,19 @@ fn read_imagedata() -> (HashMap<u64, Image>, Vec<ColTree>) {
       trees.push(ColTree::new(3));
     }
     if let Ok(im) = l {
-      let image = to_image(&im);
+      let image = to_image(&nkey, &im);
       if image.status == Status::Discarded {
         continue
       };
-      let id = image.id;
-      trees[ntree].add(image.color, id).unwrap();
-      images.insert(id, image);
+      trees[ntree].add(image.color, nkey).unwrap();
+      images.push(image);
+      nkey += 1;
     }
     if trees[ntree].size() > TREE_LIM {
       ntree += 1;
     }
   };
-  eprintln!("#IMAGE: {} / TREE: {}", images.len(), ntree + 1);
+  eprintln!("#IMAGE: {} / TREE: {}", nkey, ntree + 1);
   (images, trees)
 }
 
@@ -195,24 +193,25 @@ fn test_build_trees() {
 */
 
 //fn near_images(id: &u64, images: &BTreeMap<u64, Image>, trees: &Vec<ColTree>) -> Vec<u64> {
-fn near_images(id: &u64, images: &HashMap<u64, Image>, trees: &Vec<ColTree>) -> Vec<u64> {
+fn near_images(key: &usize, images: &Vec<Image>, trees: &Vec<ColTree>) -> Vec<usize> {
   //let mut imageids: Vec<u64> = vec![];
-  let srcimg = images.get(id).unwrap();
-  let id0 = near_image_list(id, &srcimg.color, &trees);
-  if id0.len() == 0 {
+  let srcimg = &images[*key as usize];
+  let keys = near_image_list(key, &srcimg.color, &trees);
+  if keys.len() == 0 {
     vec![]
   } else {
-    let mut nears: Vec<u64> = vec![];
+    let mut nears: Vec<usize> = vec![];
     let srcfp = &srcimg.fp;
-    for i in id0.iter() {
-      if (*i as i64 - *id as i64).abs() == 1 {  // 連続した同じような写真が含まれないように
-          continue
+    keys.iter().for_each(|k| {
+      let dstimg = &images[*k as usize];
+      if (dstimg.id as i64 - srcimg.id as i64).abs() > 1 {
+        // 連続した同じような写真が含まれないように
+        let dstfp = &dstimg.fp;
+        if same(srcfp, dstfp) {
+          nears.push(*k)
+        }
       }
-      let dstfp = &images.get(i).unwrap().fp;
-      if same(srcfp, dstfp) {
-        nears.push(*i)
-      }
-    }
+    });
     nears
   }
 }
@@ -247,22 +246,22 @@ fn test_same() {
   let fp1 = "8d7451917955937b59856c546d584660584852514443443a9582649e896aa1896e9f7c699173687e858668787e5055559a8c77a89079ac8b76af8575a68a83a0b0ba8ba5b5666f779c8e7eb08a75b68572bb8c7fb28a82a39592929a9b7d858895897baa8572b17b65c28b78bb897da98a849f9d9d959a9f74746f8a796ea17360b87c69b67f70a27b75908d9289919a42494e5f5a5b936e698d5f588c5f59976d6e77707d58657719202e4f46518d73814d414f43364281616c7a63763a3c55";
 }
 
-fn near_image_list(id: &u64, color: &Color, trees: &Vec<ColTree>) -> Vec<u64> {
-  let mut ids: Vec<u64> = vec![];
+fn near_image_list(key: &usize, color: &Color, trees: &Vec<ColTree>) -> Vec<usize> {
+  let mut keys: Vec<usize> = vec![];
   trees.iter().for_each(|tree| {
     if let Ok(res) = tree.within(color, Image::RADIUS, &squared_euclidean) {
-      let (_, id0): (Vec<f32>, Vec<u64>) = res.into_iter()
-                                              .filter(|(_, x)| *x != id)
+      let (_, key0): (Vec<f32>, Vec<usize>) = res.into_iter()
+                                              .filter(|(_, x)| *x != key)
                                               .unzip();
       //ids.iter().filter(|x| *x != id).collect()
-      for i in id0 {
-        ids.push(i);
+      for k in key0 {
+        keys.push(k);
       }
     };
     //id0.sort();
     //ids.append(&mut id0);
   });
-  ids
+  keys
 }
 
 fn and_array(id1: &Vec<u64>, id2: &Vec<u64>) -> Vec<u64> {
@@ -316,10 +315,11 @@ fn test_and_array() {
   assert_eq!(and_array(&a5, &a6), vec![1, 3]);
 }
 
-fn to_image(line: &str) -> Image {
+fn to_image(key: &usize, line: &str) -> Image {
   let im: Vec<&str> = line.split('|').collect();
   let (f, c) = to_color(im[2]);
   Image {
+    key: *key,
     id: im[0].parse().unwrap(),
     reso: (im[6].parse().unwrap(), im[7].parse().unwrap()),
     size: im[8].parse().unwrap(),

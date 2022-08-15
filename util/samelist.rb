@@ -10,6 +10,7 @@ def init
     exit 1
   end
 
+  @nwin = 0
   st = ARGV.shift.to_i
   ed = ARGV.shift.to_i
   return st, ed
@@ -44,15 +45,48 @@ def line(l)
     sz = $4.to_i
     [id, x, y, sz, x*y]
   }
-  body = ""
-  imgs.each do |im|
-    body += <<-EOS
-      <div class="column">
-        #{image(im)}
-      </div>
-    EOS
+  winner = select_winner(imgs)
+
+  if winner == nil
+    body = "      <div class=\"columns\">\n"
+    imgs.each do |im|
+      body += <<-EOS
+        <div class="column">
+          #{image(im)}
+        </div>
+      EOS
+    end
+    body + "      </div>\n"
+  else
+    @nwin += 1
+    ""
   end
-  body
+end
+
+def select_winner(imgs)
+  winner = nil
+  xs = []
+  ys = []
+  szs = []
+  imgs.each do |i|
+    xs << i[1]
+    ys << i[2]
+    szs << i[3]
+  end
+  mx = xs.max
+  my = ys.max
+  msz = szs.max
+
+  imgs.each do |chlg|
+    if chlg[1] == mx && chlg[2] == my
+      if chlg[3] == msz
+        winner = chlg
+      elsif chlg[3] * 100.0 / msz > 90
+        winner = chlg
+      end
+    end
+  end
+  winner
 end
 
 def page(st, ed)
@@ -63,9 +97,7 @@ def page(st, ed)
     next if cnt < st
     break if cnt > ed
     body += <<-EOS
-      <div class="columns">
         #{line(l.chomp)}
-      </div>
     EOS
   end
   body
@@ -97,6 +129,7 @@ def main
     </html>
   EOS
 
+  STDERR.puts "#WINNER=#{@nwin}"
 end
 
 main
