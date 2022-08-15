@@ -17,21 +17,19 @@ end
 
 def image(im)
   body = <<-EOS
-  <table>
-    <tr>
-      <td>ID:#{im[0]} (#{im[3] / 1000} kB)</td>
-    </tr>
-    <tr>
-      <td>#{im[1]} x #{im[2]} (#{sprintf("%.1f", im[4] / 1000.0)} k / #{sprintf("%2.2f", im[1] * 1.0/im[2])})</td>
-    </tr>
-    <tr>
-      <td>
+  <div class="card">
+    <div class="card-content">
+      <p class="title is-6">ID:#{im[0]} (#{im[3] / 1000} kB)</p>
+      <p class="subtitle is-7">#{im[1]} x #{im[2]} (#{sprintf("%.1f", im[4] / 1000.0)} k / #{sprintf("%2.2f", im[1] * 1.0/im[2])})</p>
+    </div>
+    <div class="card-image">
+      <figure class="image">
         <a target="one" href="http://192.168.11.50:4567/imageno/#{im[0]}">
-          <img src="http://192.168.11.50:4567/imageno/#{im[0]}" width="300px">
+          <img src="http://192.168.11.50:4567/imageno/#{im[0]}">
         </a>
-      </td>
-    </tr>
-  </table>
+      </figure>
+    </div>
+  </div>
   EOS
   body
 end
@@ -49,9 +47,9 @@ def line(l)
   body = ""
   imgs.each do |im|
     body += <<-EOS
-      <td>
+      <div class="column">
         #{image(im)}
-      </td>
+      </div>
     EOS
   end
   body
@@ -65,9 +63,9 @@ def page(st, ed)
     next if cnt < st
     break if cnt > ed
     body += <<-EOS
-      <tr>
+      <div class="columns">
         #{line(l.chomp)}
-      </tr>
+      </div>
     EOS
   end
   body
@@ -80,16 +78,21 @@ def main
     <html>
       <head>
         <title>SAMELIST</title>
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.4/css/bulma.min.css">
       </head>
       <body>
-        <div id="title">
-          <h2>SAMELIST</h2>
-        </div>
-        <div>
-          <table>
-#{page(st, ed)}
-          </table>
-        </div>
+      <div class="container">
+        <section class="hero">
+          <div class="hero-body">
+            <p class="title">
+              SAMELIST
+            </p>
+          </div>
+        </section>
+        <section>
+          #{page(st, ed)}
+        </section>
+      </div>
       </body>
     </html>
   EOS

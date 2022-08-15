@@ -4,6 +4,7 @@
 //
 
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::env;
 use std::fmt;
@@ -11,6 +12,7 @@ use std::io;
 use std::io::prelude::*;
 use std::str;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use hex;
 use kdtree::distance::squared_euclidean;
@@ -20,9 +22,10 @@ use rayon::prelude::*;
 type Color = [f32; 3];
 
 pub const COLOR0: Color = [0.0, 0.0, 0.0];
-pub const DIFF: i32 = 30;  // 12% of 255
-pub const TOLERANCE: i32 = 30 * 64;
+pub const DIFF: i32 = 30;            // 12% of 255
+pub const TOLERANCE: i32 = 30 * 64;  // 各色のずれ合計の上限
 pub const SDEVLIM: i32 = 100;        // 色ずれの分散
+pub const TREE_LIM: usize = 100000;     // 各Treeの格納数上限
 
 #[derive(PartialEq)]
 enum Status {
@@ -56,7 +59,6 @@ struct Image {
   fp: Vec<u8>,
   color: Color,
   status: Status,
-  check: bool
 }
 
 impl Image {
@@ -76,58 +78,76 @@ fn main() {
     0
   };
 
-  let (mut images, tree) = read_imagedata();
-  eprintln!("#IMAGE: {}", images.len());
+  let (mut images, trees) = read_imagedata();
 
+  let nimgs = images.len() as f32 / 100.0;
+  let time_s = Instant::now();
   // cf. https://rustforbeginners.hatenablog.com/entry/arc-mutex-design-pattern
-  let keys: Vec<_> = images.keys().cloned().collect();
   let checked = Arc::new(Mutex::new(HashSet::new()));
   images.par_iter().for_each(|(id, im)| {
-    if *id >= skip && im.status != Status::Deleted &&
-       !checked.lock().unwrap().contains(id) {
-      let mut ids: Vec<u64> = vec![];
-      for i in near_images(&id, &images, &tree)
-                 .iter()
-                 .filter(|&i| images.get(i).unwrap().status != Status::Deleted) {
-        ids.push(*i);
-        checked.lock().unwrap().insert(*i);
-      }
+    if id % 1000 == 0 {
+      let nc = checked.lock().unwrap().len() as f32;
+      let tm = time_s.elapsed().as_secs_f32() * 1000.0;
+      eprint!("checked: {} images ({:.1}%) {:.2} k/s\r", nc, nc / nimgs, nc / tm);
+    };
+    if !checked.lock().unwrap().contains(id) {
+      checked.lock().unwrap().insert(*id);
+      if *id >= skip && im.status != Status::Deleted {
+        let mut ids: Vec<u64> = vec![];
+        for i in near_images(&id, &images, &trees)
+                   .iter()
+                   .filter(|&i| images.get(i).unwrap().status != Status::Deleted) {
+          ids.push(*i);
+          checked.lock().unwrap().insert(*i);
+        }
 
-      if ids.len() > 0 {
-        print_image(&id, &images);
-        ids.iter().for_each(|i| {
-          print_image(&i, &images);
-        });
-        println!("")
+        if ids.len() > 0 {
+          print_image(&id, &images);
+          ids.iter().for_each(|i| {
+            print_image(&i, &images);
+          });
+          println!("")
+        }
       }
     }
   });
-
+  eprintln!("\nTOTAL: {:.2} s", time_s.elapsed().as_secs_f32());
 }
 
-fn print_image(id: &u64, images: &BTreeMap<u64, Image>) {
+//fn print_image(id: &u64, images: &BTreeMap<u64, Image>) {
+fn print_image(id: &u64, images: &HashMap<u64, Image>) {
   let img = images.get(id).unwrap();
   print!("{}({:?},{},({:.0},{:.0},{:.0}))/", id, img.reso, img.size,
     img.color[0] * 1000f32, img.color[1] * 1000f32, img.color[2] * 1000f32);
 }
 
-fn read_imagedata() -> (BTreeMap<u64, Image>, ColTree) {
-  let mut images = BTreeMap::new();
-  let mut tree: ColTree = ColTree::new(3);
+//fn read_imagedata() -> (BTreeMap<u64, Image>, Vec<ColTree>) {
+fn read_imagedata() -> (HashMap<u64, Image>, Vec<ColTree>) {
+  let mut images = HashMap::new();
+  let mut trees: Vec<ColTree> = vec![];
+  let mut ntree = 0_usize;
+  let mut img_cnt = 0_i32;
 
   let stdin = io::stdin();
   for l in stdin.lock().lines() {
+    if trees.len() <= ntree {
+      trees.push(ColTree::new(3));
+    }
     if let Ok(im) = l {
       let image = to_image(&im);
       if image.status == Status::Discarded {
         continue
       };
       let id = image.id;
-      tree.add(image.color, id).unwrap();
+      trees[ntree].add(image.color, id).unwrap();
       images.insert(id, image);
     }
+    if trees[ntree].size() > TREE_LIM {
+      ntree += 1;
+    }
   };
-  (images, tree)
+  eprintln!("#IMAGE: {} / TREE: {}", images.len(), ntree + 1);
+  (images, trees)
 }
 
 /*
@@ -174,10 +194,11 @@ fn test_build_trees() {
 }
 */
 
-fn near_images(id: &u64, images: &BTreeMap<u64, Image>, tree: &ColTree) -> Vec<u64> {
+//fn near_images(id: &u64, images: &BTreeMap<u64, Image>, trees: &Vec<ColTree>) -> Vec<u64> {
+fn near_images(id: &u64, images: &HashMap<u64, Image>, trees: &Vec<ColTree>) -> Vec<u64> {
   //let mut imageids: Vec<u64> = vec![];
   let srcimg = images.get(id).unwrap();
-  let id0 = near_image_list(id, &srcimg.color, &tree);
+  let id0 = near_image_list(id, &srcimg.color, &trees);
   if id0.len() == 0 {
     vec![]
   } else {
@@ -226,18 +247,22 @@ fn test_same() {
   let fp1 = "8d7451917955937b59856c546d584660584852514443443a9582649e896aa1896e9f7c699173687e858668787e5055559a8c77a89079ac8b76af8575a68a83a0b0ba8ba5b5666f779c8e7eb08a75b68572bb8c7fb28a82a39592929a9b7d858895897baa8572b17b65c28b78bb897da98a849f9d9d959a9f74746f8a796ea17360b87c69b67f70a27b75908d9289919a42494e5f5a5b936e698d5f588c5f59976d6e77707d58657719202e4f46518d73814d414f43364281616c7a63763a3c55";
 }
 
-fn near_image_list(id: &u64, color: &Color, tree: &ColTree) -> Vec<u64> {
-  let mut id0 = if let Ok(res) = tree.within(color, Image::RADIUS, &squared_euclidean) {
-    let (_, ids): (Vec<f32>, Vec<u64>) = res.into_iter()
-                                            .filter(|(_, x)| *x != id)
-                                            .unzip();
-    //ids.iter().filter(|x| *x != id).collect()
-    ids
-  } else {
-    vec![]
-  };
-  id0.sort();
-  id0
+fn near_image_list(id: &u64, color: &Color, trees: &Vec<ColTree>) -> Vec<u64> {
+  let mut ids: Vec<u64> = vec![];
+  trees.iter().for_each(|tree| {
+    if let Ok(res) = tree.within(color, Image::RADIUS, &squared_euclidean) {
+      let (_, id0): (Vec<f32>, Vec<u64>) = res.into_iter()
+                                              .filter(|(_, x)| *x != id)
+                                              .unzip();
+      //ids.iter().filter(|x| *x != id).collect()
+      for i in id0 {
+        ids.push(i);
+      }
+    };
+    //id0.sort();
+    //ids.append(&mut id0);
+  });
+  ids
 }
 
 fn and_array(id1: &Vec<u64>, id2: &Vec<u64>) -> Vec<u64> {
@@ -301,7 +326,6 @@ fn to_image(line: &str) -> Image {
     fp: f,
     color: c,
     status: to_status(im[5]),
-    check: false
   }
 }
 
