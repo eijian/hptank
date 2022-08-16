@@ -23,7 +23,7 @@ pub const COLOR0: Color = [0.0, 0.0, 0.0];
 pub const DIFF: i32 = 30;            // 12% of 255
 pub const TOLERANCE: i32 = 30 * 64;  // 各色のずれ合計の上限
 pub const SDEVLIM: i32 = 100;        // 色ずれの分散
-pub const TREE_LIM: usize = 100000;     // 各Treeの格納数上限
+pub const TREE_LIM: usize = 200000;     // 各Treeの格納数上限
 
 #[derive(PartialEq)]
 enum Status {
